@@ -25,7 +25,9 @@ class Timer:
         self.TIMA_counter = 0
         self.TMA = 0
         self.TAC = 0
-        self.dividers = [1024, 16, 64, 256]
+        # self.dividers = [1024, 16, 64, 256]
+        self.dividers = [10, 4, 6, 8]
+        self._cycles_to_interrupt = 0
 
     def reset(self):
         # TODO: Should probably one be DIV=0, but this makes a bunch of mooneye tests pass
@@ -40,32 +42,27 @@ class Timer:
         self.DIV &= 0xFF
 
         if self.TAC & 0b100 == 0: # Check if timer is not enabled
+            self._cycles_to_interrupt = 1 << 16
             return False
 
         self.TIMA_counter += cycles
         divider = self.dividers[self.TAC & 0b11]
 
-        if self.TIMA_counter >= divider:
-            self.TIMA_counter -= divider # Keeps possible remainder
+        ret = False
+        if self.TIMA_counter >= 1 << divider:
+            self.TIMA_counter -= 1 << divider # Keeps possible remainder
             self.TIMA += 1
 
             if self.TIMA > 0xFF:
                 self.TIMA = self.TMA
                 self.TIMA &= 0xFF
-                return True
-
-        return False
+                ret = True
+                # return True
+        self._cycles_to_interrupt = ((0x100 - self.TIMA) << divider) - self.TIMA_counter
+        return ret
 
     def cycles_to_interrupt(self):
-        if self.TAC & 0b100 == 0: # Check if timer is not enabled
-            # Large enough, that 'calculate_cycles' will choose 'x'
-            return 1 << 16
-
-        divider = self.dividers[self.TAC & 0b11]
-
-        cyclesleft = ((0x100 - self.TIMA) * divider) - self.TIMA_counter
-
-        return cyclesleft
+        return self._cycles_to_interrupt
 
     def save_state(self, f):
         f.write(self.DIV)

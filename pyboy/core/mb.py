@@ -296,8 +296,8 @@ class Motherboard:
                 cycles = max(
                     0,
                     min(
-                        self.lcd.cycles_to_interrupt(),
                         self.timer.cycles_to_interrupt(),
+                        self.lcd.cycles_to_interrupt(),
                         # self.serial.cycles_to_interrupt(),
                         mode0_cycles
                     )
