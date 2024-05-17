@@ -58,6 +58,7 @@ class LCD:
         self.double_speed = False
         self.cgb = cgb
         self._scanlineparameters = [[0, 0, 0, 0, 0] for _ in range(ROWS)]
+        self._cycles_to_interrupt = 0
 
         if self.cgb:
             # Setting for both modes, even though CGB is ignoring them. BGP[0] used in scanline_blank.
@@ -104,7 +105,7 @@ class LCD:
         self._STAT.set(value)
 
     def cycles_to_interrupt(self):
-        return self.clock_target - self.clock
+        return self._cycles_to_interrupt
 
     def cycles_to_mode0(self):
         multiplier = 2 if self.double_speed else 1
@@ -205,6 +206,7 @@ class LCD:
                 # Renderer
                 self.renderer.blank_screen(self)
 
+        self._cycles_to_interrupt = self.clock_target - self.clock
         return interrupt_flag
 
     def save_state(self, f):
