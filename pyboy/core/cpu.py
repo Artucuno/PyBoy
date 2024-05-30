@@ -103,7 +103,7 @@ class CPU:
     def set_interruptflag(self, flag):
         self.interrupts_flag_register |= flag
 
-    def tick(self):
+    def tick(self, cycles_target):
         if self.check_interrupts():
             self.halted = False
             # TODO: We return with the cycles it took to handle the interrupt
@@ -119,13 +119,17 @@ class CPU:
         elif self.halted:
             return 4 # TODO: Number of cycles for a HALT in effect?
 
-        old_pc = self.PC # If the PC doesn't change, we're likely stuck
-        old_sp = self.SP # Sometimes a RET can go to the same PC, so we check the SP too.
-        cycles = self.fetch_and_execute()
-        if not self.halted and old_pc == self.PC and old_sp == self.SP and not self.is_stuck and not self.mb.breakpoint_singlestep:
-            logger.debug("CPU is stuck: %s", self.dump_state(""))
-            self.is_stuck = True
-        self.interrupt_queued = False
+        self.cycles_target = cycles_target
+        if cycles_target == 0:
+            return self.fetch_and_execute()
+
+        cycles = 0
+        self.bail = False
+        while cycles < cycles_target:
+            cycles += self.fetch_and_execute()
+            if self.bail:
+                return cycles
+            self.interrupt_queued = False
         return cycles
 
     def check_interrupts(self):

@@ -36,7 +36,7 @@ cdef class CPU:
 
     @cython.locals(opcode=uint16_t)
     cdef inline uint8_t fetch_and_execute(self) noexcept nogil
-    cdef int tick(self) noexcept nogil
+    cdef int tick(self, uint64_t) noexcept nogil
     cdef void save_state(self, IntIOInterface) noexcept
     cdef void load_state(self, IntIOInterface, int) noexcept
 

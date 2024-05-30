@@ -278,9 +278,6 @@ class Motherboard:
             if self.cgb and self.hdma.transfer_active and self.lcd._STAT._mode & 0b11 == 0:
                 cycles = self.hdma.tick(self)
             else:
-                cycles = self.cpu.tick()
-
-            if self.cpu.halted:
                 # Fast-forward to next interrupt:
                 # As we are halted, we are guaranteed, that our state
                 # cannot be altered by other factors than time.
@@ -288,20 +285,22 @@ class Motherboard:
                 # it gets triggered mid-frame or by next frame
                 # Serial is not implemented, so this isn't a concern
 
-                # Help Cython with types
                 mode0_cycles = 1 << 32
                 if self.cgb and self.hdma.transfer_active:
                     mode0_cycles = self.lcd.cycles_to_mode0()
 
-                cycles = max(
+                cycles_target = max(
                     0,
                     min(
-                        self.timer.cycles_to_interrupt(),
-                        self.lcd.cycles_to_interrupt(),
+                        self.timer._cycles_to_interrupt,
+                        self.lcd._cycles_to_interrupt,
                         # self.serial.cycles_to_interrupt(),
                         mode0_cycles
                     )
                 )
+
+                # TODO: Run while-loop for max_cycles here. We clearly don't need to return to tick before.
+                cycles = self.cpu.tick(cycles_target)
 
             #TODO: Support General Purpose DMA
             # https://gbdev.io/pandocs/CGB_Registers.html#bit-7--0---general-purpose-dma
