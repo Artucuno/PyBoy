@@ -119,17 +119,23 @@ class CPU:
         elif self.halted:
             return 4 # TODO: Number of cycles for a HALT in effect?
 
-        self.cycles_target = cycles_target
-        if cycles_target == 0:
-            return self.fetch_and_execute()
+        self.interrupt_queued = False
+
+        # TODO: cpu-stuck check for blargg tests?
+        # if cycles_target != 0:
+        #     print(cycles_target)
+
+        # self.cycles_target = cycles_target
+        # if cycles_target == 0:
+        #     return self.fetch_and_execute()
 
         cycles = 0
         self.bail = False
         while cycles < cycles_target:
             cycles += self.fetch_and_execute()
-            if self.bail:
-                return cycles
-            self.interrupt_queued = False
+            if self.bail: # Possible cycles-target changes
+                break
+        assert cycles >= 4
         return cycles
 
     def check_interrupts(self):

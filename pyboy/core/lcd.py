@@ -104,9 +104,6 @@ class LCD:
     def set_stat(self, value):
         self._STAT.set(value)
 
-    def cycles_to_interrupt(self):
-        return self._cycles_to_interrupt
-
     def cycles_to_mode0(self):
         multiplier = 2 if self.double_speed else 1
         mode2 = 80 * multiplier

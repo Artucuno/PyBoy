@@ -52,7 +52,6 @@ cdef class LCD:
 
     @cython.locals(interrupt_flag=uint8_t,bx=int,by=int,wx=int,wy=int)
     cdef uint8_t tick(self, int) noexcept nogil
-    cdef int64_t cycles_to_interrupt(self) noexcept nogil
 
     cdef void set_lcdc(self, uint8_t) noexcept nogil
     cdef uint8_t get_lcdc(self) noexcept nogil
