@@ -300,26 +300,30 @@ class Motherboard:
                         mode0_cycles
                     )
                 )
+                # cycles_target = 4
 
                 # TODO: Run while-loop for max_cycles here. We clearly don't need to return to tick before.
                 cycles = self.cpu.tick(cycles_target)
 
-            #TODO: Support General Purpose DMA
-            # https://gbdev.io/pandocs/CGB_Registers.html#bit-7--0---general-purpose-dma
+            _cycles = cycles
+            for _ in range(_cycles // 4): # TODO: support arbitrary many cycles
+                cycles = 4
+                #TODO: Support General Purpose DMA
+                # https://gbdev.io/pandocs/CGB_Registers.html#bit-7--0---general-purpose-dma
 
-            # TODO: Unify interface
-            sclock = self.sound.clock
-            if self.cgb and self.double_speed:
-                self.sound.clock = sclock + cycles//2
-            else:
-                self.sound.clock = sclock + cycles
+                # TODO: Unify interface
+                sclock = self.sound.clock
+                if self.cgb and self.double_speed:
+                    self.sound.clock = sclock + cycles//2
+                else:
+                    self.sound.clock = sclock + cycles
 
-            if self.timer.tick(cycles):
-                self.cpu.set_interruptflag(INTR_TIMER)
+                if self.timer.tick(self.cpu._cycles): # TODO: support arbitrary many cycles
+                    self.cpu.set_interruptflag(INTR_TIMER)
 
-            lcd_interrupt = self.lcd.tick(cycles)
-            if lcd_interrupt:
-                self.cpu.set_interruptflag(lcd_interrupt)
+                lcd_interrupt = self.lcd.tick(cycles) # TODO: support arbitrary many cycles
+                if lcd_interrupt:
+                    self.cpu.set_interruptflag(lcd_interrupt)
 
             if self.breakpoint_singlestep:
                 break
@@ -365,6 +369,7 @@ class Motherboard:
         elif 0xFEA0 <= i < 0xFF00: # Empty but unusable for I/O
             return self.ram.non_io_internal_ram0[i - 0xFEA0]
         elif 0xFF00 <= i < 0xFF4C: # I/O ports
+            assert not self.timer.tick(self.cpu._cycles)
             if i == 0xFF04:
                 return self.timer.DIV
             elif i == 0xFF05:
@@ -478,6 +483,7 @@ class Motherboard:
         elif 0xFEA0 <= i < 0xFF00: # Empty but unusable for I/O
             self.ram.non_io_internal_ram0[i - 0xFEA0] = value
         elif 0xFF00 <= i < 0xFF4C: # I/O ports
+            assert not self.timer.tick(self.cpu._cycles)
             if i == 0xFF00:
                 self.ram.io_ports[i - 0xFF00] = self.interaction.pull(value)
             elif i == 0xFF01:
@@ -487,16 +493,16 @@ class Motherboard:
                 self.ram.io_ports[i - 0xFF00] = value
             elif i == 0xFF04:
                 self.timer.reset()
-                self.cpu.bail = True
+                # self.cpu.bail = True
             elif i == 0xFF05:
                 self.timer.TIMA = value
-                self.cpu.bail = True
+                # self.cpu.bail = True
             elif i == 0xFF06:
                 self.timer.TMA = value
-                self.cpu.bail = True
+                # self.cpu.bail = True
             elif i == 0xFF07:
                 self.timer.TAC = value & 0b111 # TODO: Move logic to Timer class
-                self.cpu.bail = True
+                # self.cpu.bail = True
             elif i == 0xFF0F:
                 self.cpu.interrupts_flag_register = value
             elif 0xFF10 <= i < 0xFF40:

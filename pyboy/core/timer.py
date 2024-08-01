@@ -28,6 +28,7 @@ class Timer:
         # self.dividers = [1024, 16, 64, 256]
         self.dividers = [10, 4, 6, 8]
         self._cycles_to_interrupt = 0
+        self.last_cycles = 0
 
     def reset(self):
         # TODO: Should probably one be DIV=0, but this makes a bunch of mooneye tests pass
@@ -35,7 +36,11 @@ class Timer:
         self.TIMA_counter = 0
         self.DIV = 0
 
-    def tick(self, cycles):
+    def tick(self, _cycles):
+        cycles = _cycles - self.last_cycles
+        if cycles == 0:
+            return False
+        self.last_cycles = _cycles
         self.DIV_counter += cycles
         self.DIV += (self.DIV_counter >> 8) # Add overflown bits to DIV
         self.DIV_counter &= 0xFF # Remove the overflown bits

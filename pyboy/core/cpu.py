@@ -39,6 +39,7 @@ class CPU:
         self.halted = False
         self.stopped = False
         self.is_stuck = False
+        self._cycles = 0
 
     def save_state(self, f):
         for n in [self.A, self.F, self.B, self.C, self.D, self.E]:
@@ -93,8 +94,8 @@ class CPU:
             f"Interrupts - IME: {self.mb.cpu.interrupt_master_enable}, "
             f"IE: {self.mb.cpu.interrupts_enabled_register:08b}, "
             f"IF: {self.mb.cpu.interrupts_flag_register:08b}\n"
-            f"LCD Intr.: {self.mb.lcd.cycles_to_interrupt()}, LY:{self.mb.lcd.LY}, LYC:{self.mb.lcd.LYC}\n"
-            f"Timer Intr.: {self.mb.timer.cycles_to_interrupt()}\n"
+            f"LCD Intr.: {self.mb.lcd._cycles_to_interrupt}, LY:{self.mb.lcd.LY}, LYC:{self.mb.lcd.LYC}\n"
+            f"Timer Intr.: {self.mb.timer._cycles_to_interrupt}\n"
             f"halted:{self.halted}, "
             f"interrupt_queued:{self.interrupt_queued}, "
             f"stopped:{self.stopped}\n"
@@ -104,39 +105,40 @@ class CPU:
         self.interrupts_flag_register |= flag
 
     def tick(self, cycles_target):
-        if self.check_interrupts():
-            self.halted = False
-            # TODO: We return with the cycles it took to handle the interrupt
-            return 0
-
-        if self.halted and self.interrupt_queued:
-            # GBCPUman.pdf page 20
-            # WARNING: The instruction immediately following the HALT instruction is "skipped" when interrupts are
-            # disabled (DI) on the GB,GBP, and SGB.
-            self.halted = False
-            self.PC += 1
-            self.PC &= 0xFFFF
-        elif self.halted:
-            return 4 # TODO: Number of cycles for a HALT in effect?
-
-        self.interrupt_queued = False
-
-        # TODO: cpu-stuck check for blargg tests?
-        # if cycles_target != 0:
-        #     print(cycles_target)
-
-        # self.cycles_target = cycles_target
-        # if cycles_target == 0:
-        #     return self.fetch_and_execute()
-
-        cycles = 0
+        _cycles0 = self._cycles
         self.bail = False
-        while cycles < cycles_target:
-            cycles += self.fetch_and_execute()
+        while self._cycles - _cycles0 < cycles_target:
+            if self.check_interrupts():
+                self.halted = False
+                # TODO: We return with the cycles it took to handle the interrupt
+                break
+                # return cycles
+
+            if self.halted and self.interrupt_queued:
+                # GBCPUman.pdf page 20
+                # WARNING: The instruction immediately following the HALT instruction is "skipped" when interrupts are
+                # disabled (DI) on the GB,GBP, and SGB.
+                self.halted = False
+                self.PC += 1
+                self.PC &= 0xFFFF
+            elif self.halted:
+                self._cycles += 4 # TODO: Number of cycles for a HALT in effect?
+                break
+
+            self.interrupt_queued = False
+
+            # TODO: cpu-stuck check for blargg tests?
+            # if cycles_target != 0:
+            #     print(cycles_target)
+
+            # self.cycles_target = cycles_target
+            # if cycles_target == 0:
+            #     return self.fetch_and_execute()
+
+            self._cycles += self.fetch_and_execute()
             if self.bail: # Possible cycles-target changes
                 break
-        assert cycles >= 4
-        return cycles
+        return self._cycles - _cycles0
 
     def check_interrupts(self):
         if self.interrupt_queued:

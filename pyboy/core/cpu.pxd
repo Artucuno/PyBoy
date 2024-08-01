@@ -30,7 +30,7 @@ cdef class CPU:
 
     cdef uint8_t interrupts_flag, interrupts_enabled, interrupts_flag_register, interrupts_enabled_register
 
-    cdef int64_t cycles_target
+    cdef int64_t cycles_target, _cycles
 
     cdef inline int check_interrupts(self) noexcept nogil
     cdef void set_interruptflag(self, int) noexcept nogil
@@ -38,7 +38,7 @@ cdef class CPU:
 
     @cython.locals(opcode=uint16_t)
     cdef inline uint8_t fetch_and_execute(self) noexcept nogil
-    @cython.locals(cycles=int64_t)
+    @cython.locals(_cycles0=int64_t)
     cdef int tick(self, int64_t) noexcept nogil
     cdef void save_state(self, IntIOInterface) noexcept
     cdef void load_state(self, IntIOInterface, int) noexcept
