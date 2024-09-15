@@ -7,6 +7,7 @@ Tools to help interfacing with the Game Boy hardware
 """
 
 from . import constants
+from .cartridge import Cartridge
 from .screen import Screen
 from .sprite import Sprite
 from .tile import Tile

@@ -13,6 +13,7 @@ import time
 
 import numpy as np
 
+from pyboy.api.cartridge import Cartridge
 from pyboy.api.memory_scanner import MemoryScanner
 from pyboy.api.screen import Screen
 from pyboy.api.tilemap import TileMap
@@ -354,6 +355,8 @@ class PyBoy:
         `pyboy.plugins.base_plugin.PyBoyGameWrapper`:
             A game-specific wrapper object.
         """
+
+        self.cartridge = Cartridge(self.mb)
 
         self.initialized = True
 
