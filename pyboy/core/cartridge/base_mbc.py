@@ -34,6 +34,9 @@ class BaseMBC:
         self.external_ram_count = external_ram_count
         self.init_rambanks(external_ram_count)
         self.gamename = self.getgamename(rombanks)
+        self.gametype = self.getgametype(rombanks)
+        self.destinationcode = self.getdestinationcode(rombanks)
+        self.isgenuine = self.getisgenuine(rombanks)
 
         self.memorymodel = 0
         self.rambank_enabled = False
@@ -105,8 +108,54 @@ class BaseMBC:
     def getgamename(self, rombanks):
         return "".join([chr(rombanks[0, x]) for x in range(0x0134, 0x0142)]).split("\0")[0]
 
+    def getgametype(self, rombanks):
+        """
+        This byte specifies which model of Gameboy the game is for.
+        """
+        if rombanks[0, 0x143] == 0x80 or rombanks[0, 0x143] == 0xc0:
+            return "cgb" # Gameboy Color
+        elif rombanks[0, 0x146] == 0x03:
+            return "sgb" # Super Gameboy
+        else:
+            return "dmg" # Gameboy
+
+    def getdestinationcode(self, rombanks):
+        """
+        This byte specifies whether this version of the game is intended to be sold in Japan or elsewhere.
+
+        0x00: Japanese
+        0x01: Non-Japanese
+
+        https://gbdev.io/pandocs/The_Cartridge_Header.html#014a--destination-code
+        """
+        if self.gametype == "dmg":
+            return
+        return rombanks[0, 0x014A] #
+
     def setitem(self, address, value):
         raise Exception("Cannot set item in MBC")
+
+    def getisgenuine(self, rombanks):
+        """
+        Check if the nintendo logo is correct
+        CE ED 66 66 CC 0D 00 0B 03 73 00 83 00 0C 00 0D
+        00 08 11 1F 88 89 00 0E DC CC 6E E6 DD DD D9 99
+        BB BB 67 63 6E 0E EC CC DD DC 99 9F BB B9 33 3E
+
+        https://gbdev.io/pandocs/The_Cartridge_Header.html#0104-0133--nintendo-logo
+        """
+
+        nintendo_logo = [
+            0xCE, 0xED, 0x66, 0x66, 0xCC, 0x0D, 0x00, 0x0B, 0x03, 0x73, 0x00, 0x83, 0x00, 0x0C, 0x00, 0x0D, 0x00, 0x08,
+            0x11, 0x1F, 0x88, 0x89, 0x00, 0x0E, 0xDC, 0xCC, 0x6E, 0xE6, 0xDD, 0xDD, 0xD9, 0x99, 0xBB, 0xBB, 0x67, 0x63,
+            0x6E, 0x0E, 0xEC, 0xCC, 0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E
+        ]
+
+        for i in range(0x104, 0x134):
+            if rombanks[0, i] != nintendo_logo[i - 0x104]:
+                return False
+
+        return True
 
     def overrideitem(self, rom_bank, address, value):
         if 0x0000 <= address < 0x4000:
@@ -138,6 +187,9 @@ class BaseMBC:
             "MBC class: %s" % self.__class__.__name__,
             "Filename: %s" % self.filename,
             "Game name: %s" % self.gamename,
+            "Game type: %s" % self.gametype,
+            "Destination code: %s" % hex(self.destinationcode),
+            "Is genuine: %s" % self.isgenuine,
             "GB Color: %s" % str(self.rombanks[0, 0x143] == 0x80),
             "Cartridge type: %s" % hex(self.carttype),
             "Number of ROM banks: %s" % self.external_rom_count,

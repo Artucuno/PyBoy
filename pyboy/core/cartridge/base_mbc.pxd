@@ -18,6 +18,9 @@ cdef class BaseMBC:
     cdef uint8_t[:, :] rombanks
     cdef uint8_t[:,:] rambanks
     cdef uint8_t carttype
+    cdef str gametype
+    cdef uint16_t destinationcode
+    cdef bint isgenuine
     cdef bint battery
     cdef bint rtc_enabled
     cdef RTC rtc
