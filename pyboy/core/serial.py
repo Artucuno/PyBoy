@@ -1,8 +1,9 @@
-import os
-import platform
+# BGB Link Cable Server
+# https://bgb.bircd.org/bgblink.html
+
 import queue
-import select
 import socket
+import struct
 import threading
 import time
 
@@ -12,7 +13,11 @@ logger = pyboy.logging.get_logger(__name__)
 
 INTR_VBLANK, INTR_LCDC, INTR_TIMER, INTR_SERIAL, INTR_HIGHTOLOW = [1 << x for x in range(5)]
 SERIAL_FREQ = 8192 # Hz
-CPU_FREQ = 4194304 # Hz  # Corrected CPU Frequency
+CPU_FREQ = 4213440 # Hz
+
+PACKET_FORMAT = "<4BI" # BGB Link Cable Packet Format
+PACKET_SIZE_BYTES = 8 # BGB Link Cable Packet Size
+BGB_VERSION = (1, 4, 0) # Major, Minor, Patch
 
 async_recv = queue.Queue()
 
@@ -21,14 +26,24 @@ class Serial:
     """Gameboy Link Cable Emulation"""
     def __init__(self, mb, serial_address, serial_bind, serial_interrupt_based):
         self.mb = mb
-        self.SC = 0b00000000 # Serial transfer control
-        self.SB = 0b00000000 # Serial transfer data
+        self.SC = 0b0 # Serial transfer control
+        self.SB = 0b0 # Serial transfer data
         self.connection = None
 
         self.trans_bits = 0 # Number of bits transferred
         self.cycles_count = 0 # Number of cycles since last transfer
         self.cycles_target = CPU_FREQ // SERIAL_FREQ
-        self.serial_interrupt_based = serial_interrupt_based
+
+        self._handlers = {
+            1: self._handle_version,
+            101: self._handle_joypad_update,
+            104: self._handle_sync1,
+            105: self._handle_sync2,
+            106: self._handle_sync3,
+            108: self._handle_status,
+            109: self._handle_want_disconnect
+        }
+        self._last_received_timestamp = 0
 
         self.recv = queue.Queue()
 
@@ -53,6 +68,7 @@ class Serial:
         if serial_bind:
             self.binding_connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.binding_connection.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.binding_connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1) # BGB requires this
             logger.info(f"Binding to {serial_address}")
             self.binding_connection.bind(address_tuple)
             self.binding_connection.listen(1)
@@ -64,21 +80,114 @@ class Serial:
             self.connection.connect(address_tuple)
             logger.info(f"Connection successful!")
             self.is_master = False
-        self.connection.setblocking(False)
+        # self.connection.setblocking(False)
         self.recv_t = threading.Thread(target=lambda: self.recv_thread())
         self.recv_t.daemon = True
         self.recv_t.start()
 
     def recv_thread(self):
+        self.connection.send(struct.pack(  # Send version packet
+            self.PACKET_FORMAT,
+            1,  # Version packet
+            BGB_VERSION[0],  # Major
+            BGB_VERSION[1],  # Minor
+            BGB_VERSION[2],  # Patch
+            0   # Timestamp
+        ))
         while not self.quitting:
             try:
                 data = self.connection.recv(1)
-                self.recv.put(data)
-            except BlockingIOError as e:
+                if not data:
+                    print("Connection closed")
+                    break
+                b1, b2, b3, b4, timestamp = struct.unpack(self.PACKET_FORMAT, data)
+                self._last_received_timestamp = timestamp
+                if b1 in self._handlers:
+                    response = self._handlers[b1](b2, b3, b4)
+                    if response:
+                        self.connection.send(response)
+                else:
+                    logger.warning(f"Unknown packet received: {b1}")
+            except BlockingIOError:
                 pass
             except ConnectionResetError as e:
                 print(f"Connection reset by peer: {e}")
                 break
+
+    def _handle_version(self, major, minor, patch):
+        logger.info(f"Connected to BGB version {major}.{minor}.{patch}")
+        if (major, minor, patch) != BGB_VERSION:
+            logger.error(f"BGB version mismatch! Expected {BGB_VERSION}, got {major}.{minor}.{patch}")
+            raise Exception("BGB version mismatch!")
+        return self._get_status_packet()
+
+    def _handle_joypad_update(self, b2, b3, b4):
+        # Unused for now
+        return None
+
+    def _client_data_handler(self, data):
+        # TODO: Handle data
+        return None
+
+    def _handle_sync1(self, data, _control, _b4):
+        # Data received from master
+        print(data, _control, _b4)
+        response = self._client_data_handler(data)
+        if response is not None:
+            return struct.pack(
+                self.PACKET_FORMAT,
+                105, # Slave data packet
+                response, # Data value
+                0x81, # Control value
+                0, # Unused
+                self._last_received_timestamp
+            )
+        return None
+
+    def _handle_sync2(self, data, _control, _b4):
+        # TODO: Data received from slave
+        print(data, _control, _b4)
+        return None
+
+    def _handle_sync3(self, b2, b3, b4):
+        # Ack/echo
+        return struct.pack(
+            self.PACKET_FORMAT,
+            106, # Sync3 packet
+            b2,
+            b3,
+            b4,
+            self._last_received_timestamp
+        )
+
+    def _handle_status(self, b2, b3, b4):
+        # Status packet
+        # TODO: stop logic when client is paused
+        print("Received status packet:")
+        print("\tRunning:", (b2 & 1) == 1)
+        print("\tPaused:", (b2 & 2) == 2)
+        print("\tSupports reconnect:", (b2 & 4) == 4)
+
+        # The docs say not to respond to status with status,
+        # but not doing this causes link instability
+        return self._get_status_packet()
+
+    def _handle_want_disconnect(self, b2, b3, b4):
+        # Disconnect packet
+        print("Received disconnect packet")
+        self.connection.close()
+        return None
+
+    def _get_status_packet(self):
+        # TODO: Include correct state flags in status packet (EG: pyboy.paused)
+        return struct.pack(
+            self.PACKET_FORMAT,
+            108, # Status packet
+            1, # State=running
+            0, # State=paused
+            0, # State=supportreconnect
+            self._last_received_timestamp
+        )
 
     def send_bit(self):
         send_bit = bytes([(self.SB >> 7) & 1])
@@ -129,13 +238,9 @@ class Serial:
         return False
 
     def cycles_to_transmit(self):
-        if self.connection:
-            if self.SC & 0x80:
-                return max(self.cycles_target - self.cycles_count, 0)
-            else:
-                return 1 << 16
-        else:
-            return 1 << 16
+        if self.connection and self.SC & 0x80:
+            return max(self.cycles_target - self.cycles_count, 0)
+        return 1 << 16
 
     def stop(self):
         self.quitting = True
