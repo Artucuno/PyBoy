@@ -50,6 +50,9 @@ class Serial:
         # Timestamps can wrap over. Timestamps are used so each side can, at the right times, wait for the remote side,
         # for synchronization.
         self._timestamp = 0
+        self._ts_cycles = 0
+        self._start_time = 0
+        self._got_version = False
         self._last_received_timestamp = 0
 
         self.recv = queue.Queue()
@@ -68,9 +71,6 @@ class Serial:
         address_tuple = (address_ip, int(address_port))
 
         self.is_master = True
-        self.transfer_enabled = False
-        self.waiting_for_byte = False
-        self.byte_retry_count = 0
 
         if serial_bind:
             self.binding_connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -88,6 +88,7 @@ class Serial:
             logger.info(f"Connection successful!")
             self.is_master = False
         # self.connection.setblocking(False)
+        self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1) # BGB requires this
         self.recv_t = threading.Thread(target=lambda: self.recv_thread())
         self.recv_t.daemon = True
         self.recv_t.start()
@@ -126,33 +127,36 @@ class Serial:
         if (major, minor, patch) != BGB_VERSION:
             logger.error(f"BGB version mismatch! Expected {BGB_VERSION}, got {major}.{minor}.{patch}")
             raise Exception("BGB version mismatch!")
-        return self._get_status_packet()
+        if not self._got_version: # Only send status packet once
+            self._got_version = True
+            return self._get_status_packet()
+        return None
 
     def _handle_joypad_update(self, b2, b3, b4, timestamp):
         # Unused for now
         return None
 
-    def _client_data_handler(self, data):
+    def _client_data_handler(self, data, timestamp):
         # Handle data received from master and return response
 
         # Check if transfer is enabled
         # if self.SC & 0x80 == 0:
         #     return None
 
-        self.recv.put(data)
-
         send_bit = (self.SB >> 7) & 1
+
+        self.recv.put((data, timestamp))
 
         return send_bit
 
     def _handle_sync1(self, data, _control, _b4, timestamp):
         # Data received from master
-        print("sync1", data, _control, _b4)
-        response = self._client_data_handler(data)
+        # print("sync1", data, _control, _b4, timestamp)
+        response = self._client_data_handler(data, timestamp)
         if response is not None:
             return struct.pack(
                 PACKET_FORMAT,
-                105, # Slave data packet
+                104 if self.is_master else 105,
                 response, # Data value
                 self.SC, # Control value
                 0, # Unused
@@ -161,14 +165,14 @@ class Serial:
         return None
 
     def _handle_sync2(self, data, _control, _b4, timestamp):
-        # TODO: Data received from slave
-        print("sync2", data, _control, _b4, timestamp)
+        # Data received from slave
+        # print("sync2", data, _control, _b4, timestamp)
 
-        response = self._client_data_handler(data)
+        response = self._client_data_handler(data, timestamp)
         if response is not None:
             return struct.pack(
                 PACKET_FORMAT,
-                105, # Sync1 packet
+                104 if self.is_master else 105,
                 response, # Data value
                 self.SC, # Control value
                 0, # Unused
@@ -178,8 +182,7 @@ class Serial:
 
     def _handle_sync3(self, b2, b3, b4, timestamp):
         # Ack/echo
-        print("sync3", b2, b3, b4)
-        self._last_received_timestamp = timestamp
+        # print("sync3", b2, b3, b4)
         return struct.pack(
             PACKET_FORMAT,
             106, # Sync3 packet
@@ -240,20 +243,27 @@ class Serial:
 
         # Update timestamp every 2 MiHz clocks
         # (2^21 cycles per second)
+        # Timestamps only contain the lowest 31 bits, the highest bit is always 0.
+        # Timestamps can wrap over. Timestamps are used so each side can, at the right times,
+        # wait for the remote side, for synchronization.
         # NOTE: Check if this is correct
-        if self.cycles_count >= CPU_FREQ:
-            self._timestamp += self.cycles_count // CPU_FREQ
-            self.cycles_count %= CPU_FREQ
+        self._ts_cycles += cycles
+        if self._ts_cycles >= (1 << 21):
+            self._ts_cycles -= (1 << 21)
+            self._timestamp += 1
 
-        if self.SC & 0x80 == 0:
-            return False
+        print(bin(self.SB))
 
         if self.cycles_to_transmit() == 0:
-            self.send_bit()
-            time.sleep(1 / SERIAL_FREQ)
+            if self._timestamp > self._last_received_timestamp:
+                return False
 
-            rb = self.recv.get()
-            self.SB = ((self.SB << 1) & 0xFF) | rb
+            if (self.SC >> 7) & 1:
+                self.send_bit()
+
+            # TODO: Keep in sync based on timestamp
+            byte, timestamp = self.recv.get()
+            self.SB = ((self.SB << 1) & 0xFF) | byte
             self.trans_bits += 1
 
             self.cycles_count = 0 # Reset cycle count after transmission
