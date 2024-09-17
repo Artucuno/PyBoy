@@ -43,6 +43,13 @@ class Serial:
             108: self._handle_status,
             109: self._handle_want_disconnect
         }
+        # Both sides maintain a "timestamp",
+        # which is in 2 MiHz clocks (2^21 cycles per second).
+        # Each side sends its own local timestamp in packets, and maintains the difference between its own timestamp,
+        # and the received timestamp. Timestamps only contain the lowest 31 bits, the highest bit is always 0.
+        # Timestamps can wrap over. Timestamps are used so each side can, at the right times, wait for the remote side,
+        # for synchronization.
+        self._timestamp = 0
         self._last_received_timestamp = 0
 
         self.recv = queue.Queue()
@@ -87,7 +94,7 @@ class Serial:
 
     def recv_thread(self):
         self.connection.send(struct.pack(  # Send version packet
-            self.PACKET_FORMAT,
+            PACKET_FORMAT,
             1,  # Version packet
             BGB_VERSION[0],  # Major
             BGB_VERSION[1],  # Minor
@@ -96,14 +103,14 @@ class Serial:
         ))
         while not self.quitting:
             try:
-                data = self.connection.recv(1)
+                data = self.connection.recv(PACKET_SIZE_BYTES)
                 if not data:
                     print("Connection closed")
                     break
-                b1, b2, b3, b4, timestamp = struct.unpack(self.PACKET_FORMAT, data)
+                b1, b2, b3, b4, timestamp = struct.unpack(PACKET_FORMAT, data)
                 self._last_received_timestamp = timestamp
                 if b1 in self._handlers:
-                    response = self._handlers[b1](b2, b3, b4)
+                    response = self._handlers[b1](b2, b3, b4, timestamp)
                     if response:
                         self.connection.send(response)
                 else:
@@ -114,53 +121,75 @@ class Serial:
                 print(f"Connection reset by peer: {e}")
                 break
 
-    def _handle_version(self, major, minor, patch):
+    def _handle_version(self, major, minor, patch, timestamp):
         logger.info(f"Connected to BGB version {major}.{minor}.{patch}")
         if (major, minor, patch) != BGB_VERSION:
             logger.error(f"BGB version mismatch! Expected {BGB_VERSION}, got {major}.{minor}.{patch}")
             raise Exception("BGB version mismatch!")
         return self._get_status_packet()
 
-    def _handle_joypad_update(self, b2, b3, b4):
+    def _handle_joypad_update(self, b2, b3, b4, timestamp):
         # Unused for now
         return None
 
     def _client_data_handler(self, data):
-        # TODO: Handle data
-        return None
+        # Handle data received from master and return response
 
-    def _handle_sync1(self, data, _control, _b4):
+        # Check if transfer is enabled
+        # if self.SC & 0x80 == 0:
+        #     return None
+
+        self.recv.put(data)
+
+        send_bit = (self.SB >> 7) & 1
+
+        return send_bit
+
+    def _handle_sync1(self, data, _control, _b4, timestamp):
         # Data received from master
-        print(data, _control, _b4)
+        print("sync1", data, _control, _b4)
         response = self._client_data_handler(data)
         if response is not None:
             return struct.pack(
-                self.PACKET_FORMAT,
+                PACKET_FORMAT,
                 105, # Slave data packet
                 response, # Data value
-                0x81, # Control value
+                self.SC, # Control value
                 0, # Unused
-                self._last_received_timestamp
+                self._timestamp
             )
         return None
 
-    def _handle_sync2(self, data, _control, _b4):
+    def _handle_sync2(self, data, _control, _b4, timestamp):
         # TODO: Data received from slave
-        print(data, _control, _b4)
+        print("sync2", data, _control, _b4, timestamp)
+
+        response = self._client_data_handler(data)
+        if response is not None:
+            return struct.pack(
+                PACKET_FORMAT,
+                105, # Sync1 packet
+                response, # Data value
+                self.SC, # Control value
+                0, # Unused
+                self._timestamp
+            )
         return None
 
-    def _handle_sync3(self, b2, b3, b4):
+    def _handle_sync3(self, b2, b3, b4, timestamp):
         # Ack/echo
+        print("sync3", b2, b3, b4)
+        self._last_received_timestamp = timestamp
         return struct.pack(
-            self.PACKET_FORMAT,
+            PACKET_FORMAT,
             106, # Sync3 packet
             b2,
             b3,
             b4,
-            self._last_received_timestamp
+            self._timestamp
         )
 
-    def _handle_status(self, b2, b3, b4):
+    def _handle_status(self, b2, b3, b4, timestamp):
         # Status packet
         # TODO: stop logic when client is paused
         print("Received status packet:")
@@ -172,7 +201,7 @@ class Serial:
         # but not doing this causes link instability
         return self._get_status_packet()
 
-    def _handle_want_disconnect(self, b2, b3, b4):
+    def _handle_want_disconnect(self, b2, b3, b4, timestamp):
         # Disconnect packet
         print("Received disconnect packet")
         self.connection.close()
@@ -181,20 +210,25 @@ class Serial:
     def _get_status_packet(self):
         # TODO: Include correct state flags in status packet (EG: pyboy.paused)
         return struct.pack(
-            self.PACKET_FORMAT,
+            PACKET_FORMAT,
             108, # Status packet
             1, # State=running
             0, # State=paused
             0, # State=supportreconnect
-            self._last_received_timestamp
+            self._timestamp
         )
 
     def send_bit(self):
-        send_bit = bytes([(self.SB >> 7) & 1])
-        try:
-            self.connection.send(send_bit)
-        except ConnectionResetError:
-            self.SB = 0xFF
+        self.connection.send(
+            struct.pack(
+                PACKET_FORMAT,
+                104 if self.is_master else 105, # Sync1 packet
+                (self.SB >> 7) & 1, # Data value
+                self.SC, # Control value
+                0, # Unused
+                self._timestamp
+            )
+        )
 
     def tick(self, cycles):
         if self.connection is None:
@@ -202,31 +236,25 @@ class Serial:
             self.SB = 0xFF
             return False
 
-        if self.SC & 0x80 == 0: # Check if transfer is enabled
+        self.cycles_count += cycles
+
+        # Update timestamp every 2 MiHz clocks
+        # (2^21 cycles per second)
+        # NOTE: Check if this is correct
+        if self.cycles_count >= CPU_FREQ:
+            self._timestamp += self.cycles_count // CPU_FREQ
+            self.cycles_count %= CPU_FREQ
+
+        if self.SC & 0x80 == 0:
             return False
 
-        self.cycles_count += cycles # Accumulate cycles
-
         if self.cycles_to_transmit() == 0:
-            if not self.waiting_for_byte:
-                self.send_bit()
+            self.send_bit()
             time.sleep(1 / SERIAL_FREQ)
 
-            try:
-                rb = self.recv.get_nowait()
-                self.waiting_for_byte = False
-                self.byte_retry_count = 0
-                self.trans_bits += 1
-            except queue.Empty as e:
-                # This part prevents indefinite lockup
-                # while waiting for bytes
-                self.waiting_for_byte = True
-                self.byte_retry_count += 1
-                if self.byte_retry_count >= 8:
-                    self.byte_retry_count = 0
-                    self.cycles_count = 0 # Reset cycles
-                return False
-            self.SB = ((self.SB << 1) & 0xFF) | rb[0]
+            rb = self.recv.get()
+            self.SB = ((self.SB << 1) & 0xFF) | rb
+            self.trans_bits += 1
 
             self.cycles_count = 0 # Reset cycle count after transmission
 
